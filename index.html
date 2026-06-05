@@ -255,14 +255,15 @@ const COLORS   = { summative:'#dc2626', formative:'#2563eb', health:'#16a34a', c
 const DAYS     = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MONTHS   = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
-let currentTab = 'upcoming';
-let calYear    = new Date().getFullYear();
-let calMonth   = new Date().getMonth();
-let gcalEvents = [];
-let gapiInited = false;
-let gisInited  = false;
+let currentTab      = 'upcoming';
+let calYear         = new Date().getFullYear();
+let calMonth        = new Date().getMonth();
+let gcalEvents      = [];
+let gapiInited      = false;
+let gisInited       = false;
 let tokenClient;
-let isConnected = false;
+let isConnected     = false;
+let tasksInitDone   = false;
 
 function load(k)    { try { return JSON.parse(localStorage.getItem(k)) || []; } catch { return []; } }
 function save(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
@@ -389,8 +390,9 @@ function handleAuth() {
     const token = gapi.client.getToken();
     if (token) google.accounts.oauth2.revoke(token.access_token, () => {});
     gapi.client.setToken('');
-    isConnected = false;
-    gcalEvents  = [];
+    isConnected   = false;
+    tasksInitDone = false;
+    gcalEvents    = [];
     localStorage.removeItem('gcal_was_connected');
     localStorage.removeItem('gcal_token');
     updateAuthUI(false);
@@ -534,6 +536,8 @@ function deleteLocalEvent(id) {
 
 // ── Google Tasks helpers ───────────────────────────────────────────────────
 async function initTasksAndRender() {
+  if (tasksInitDone) return;
+  tasksInitDone = true;
   // Get or create the Goals task list
   try {
     const lists = await gapi.client.tasks.tasklists.list({ maxResults: 100 });
