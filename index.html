@@ -247,7 +247,7 @@ body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); c
 
 <script>
 const CLIENT_ID = '1072265953165-3vbd3epnn10fp9k3r3r4cgmoqe9pi54h.apps.googleusercontent.com';
-const SCOPES    = 'https://www.googleapis.com/auth/calendar';
+const SCOPES    = 'https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/tasks';
 
 const PRIORITY = { summative:1, formative:2, health:3, cleaning:4, goal:5, social:6, vacation:7, other:8 };
 const LABELS   = { summative:'Summative', formative:'Formative', health:'Health', cleaning:'Cleaning', goal:'Long-term goal', social:'Social', vacation:'Vacation', other:'Other' };
@@ -340,7 +340,10 @@ function calNav(dir) {
 
 function gapiLoaded() {
   gapi.load('client', async () => {
-    await gapi.client.init({ discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'] });
+    await gapi.client.init({ discoveryDocs: [
+      'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest',
+      'https://www.googleapis.com/discovery/v1/apis/tasks/v1/rest'
+    ] });
     gapiInited = true;
     maybeReady();
   });
@@ -356,6 +359,7 @@ function gisLoaded() {
       localStorage.setItem('gcal_token', JSON.stringify({ access_token: resp.access_token, expires_at: Date.now() + (resp.expires_in * 1000) }));
       updateAuthUI(true);
       await fetchGCalEvents();
+      await initTasksAndRender();
     }
   });
   gisInited = true;
@@ -373,6 +377,7 @@ function maybeReady() {
     isConnected = true;
     updateAuthUI(true);
     fetchGCalEvents();
+    initTasksAndRender();
   } else {
     // Token expired — try silent refresh
     tokenClient.requestAccessToken({ prompt: '' });
@@ -527,49 +532,169 @@ function deleteLocalEvent(id) {
   renderLocalEvents(); updatePriority(); renderCalendar();
 }
 
-function renderTodos() {
-  const todos = load('sd_todos');
-  const el    = document.getElementById('todos-list');
-  if (!todos.length) { el.innerHTML = '<div class="empty">No tasks yet</div>'; return; }
-  el.innerHTML = todos.map(t => `<div class="todo-item">
-    <input type="checkbox" class="check" ${t.done?'checked':''} onchange="toggleTodo('${t.id}',this.checked)">
-    <span class="item-text ${t.done?'done':''}">${esc(t.title)}</span>
-    <button class="item-del" onclick="deleteTodo('${t.id}')">×</button>
-  </div>`).join('');
+// ── Google Tasks helpers ───────────────────────────────────────────────────
+async function initTasksAndRender() {
+  // Get or create the Goals task list
+  try {
+    const lists = await gapi.client.tasks.tasklists.list({ maxResults: 100 });
+    const existing = (lists.result.items || []).find(l => l.title === 'Dashboard Goals');
+    if (existing) {
+      localStorage.setItem('gtasks_goals_id', existing.id);
+    } else {
+      const newList = await gapi.client.tasks.tasklists.insert({ resource: { title: 'Dashboard Goals' } });
+      localStorage.setItem('gtasks_goals_id', newList.result.id);
+    }
+    // Migrate any existing localStorage todos to Google Tasks
+    const localTodos = load('sd_todos');
+    if (localTodos.length) {
+      for (const t of localTodos) {
+        await gapi.client.tasks.tasks.insert({ tasklist: '@default', resource: { title: t.title, status: t.done ? 'completed' : 'needsAction' } });
+      }
+      save('sd_todos', []);
+    }
+    // Migrate any existing localStorage goals to Google Tasks
+    const localGoals = load('sd_goals');
+    const goalsListId = localStorage.getItem('gtasks_goals_id');
+    if (localGoals.length && goalsListId) {
+      for (const g of localGoals) {
+        await gapi.client.tasks.tasks.insert({ tasklist: goalsListId, resource: { title: g.title, status: g.done ? 'completed' : 'needsAction' } });
+      }
+      save('sd_goals', []);
+    }
+  } catch (err) { console.error('Tasks init error:', err); }
+  await renderTodos();
+  await renderGoals();
 }
-function addTodo() {
+
+// ── Todos ──────────────────────────────────────────────────────────────────
+async function renderTodos() {
+  const el = document.getElementById('todos-list');
+  if (!isConnected) {
+    const todos = load('sd_todos');
+    if (!todos.length) { el.innerHTML = '<div class="empty">No tasks yet</div>'; return; }
+    el.innerHTML = todos.map(t => `<div class="todo-item">
+      <input type="checkbox" class="check" ${t.done?'checked':''} onchange="toggleTodo('${t.id}',this.checked)">
+      <span class="item-text ${t.done?'done':''}">${esc(t.title)}</span>
+      <button class="item-del" onclick="deleteTodo('${t.id}')">×</button>
+    </div>`).join('');
+    return;
+  }
+  try {
+    const resp  = await gapi.client.tasks.tasks.list({ tasklist: '@default', showCompleted: true, showHidden: true, maxResults: 100 });
+    const tasks = (resp.result.items || []).filter(t => t.title);
+    if (!tasks.length) { el.innerHTML = '<div class="empty">No tasks yet</div>'; return; }
+    el.innerHTML = tasks.map(t => `<div class="todo-item">
+      <input type="checkbox" class="check" ${t.status==='completed'?'checked':''} onchange="toggleTodo('${t.id}',this.checked)">
+      <span class="item-text ${t.status==='completed'?'done':''}">${esc(t.title)}</span>
+      <button class="item-del" onclick="deleteTodo('${t.id}')">×</button>
+    </div>`).join('');
+  } catch (err) { el.innerHTML = '<div class="empty">Could not load tasks.</div>'; console.error(err); }
+}
+
+async function addTodo() {
   const title = document.getElementById('todo-title').value.trim();
   if (!title) return;
-  const todos = load('sd_todos');
-  todos.push({ id: uid(), title, done: false });
-  save('sd_todos', todos);
+  if (isConnected) {
+    try {
+      await gapi.client.tasks.tasks.insert({ tasklist: '@default', resource: { title, status: 'needsAction' } });
+    } catch (err) { console.error(err); }
+  } else {
+    const todos = load('sd_todos');
+    todos.push({ id: uid(), title, done: false });
+    save('sd_todos', todos);
+  }
   document.getElementById('todo-title').value = '';
-  toggleForm('todo-form'); renderTodos();
+  toggleForm('todo-form');
+  await renderTodos();
 }
-function toggleTodo(id, done) { save('sd_todos', load('sd_todos').map(t => t.id===id?{...t,done}:t)); renderTodos(); }
-function deleteTodo(id) { save('sd_todos', load('sd_todos').filter(t => t.id!==id)); renderTodos(); }
 
-function renderGoals() {
-  const goals = load('sd_goals');
-  const el    = document.getElementById('goals-list');
-  if (!goals.length) { el.innerHTML = '<div class="empty">No goals yet</div>'; return; }
-  el.innerHTML = goals.map(g => `<div class="goal-item">
-    <input type="checkbox" class="check" ${g.done?'checked':''} onchange="toggleGoal('${g.id}',this.checked)">
-    <span class="item-text ${g.done?'done':''}">${esc(g.title)}</span>
-    <button class="item-del" onclick="deleteGoal('${g.id}')">×</button>
-  </div>`).join('');
+async function toggleTodo(id, done) {
+  if (isConnected) {
+    try {
+      const task = await gapi.client.tasks.tasks.get({ tasklist: '@default', task: id });
+      await gapi.client.tasks.tasks.update({ tasklist: '@default', task: id, resource: { ...task.result, status: done ? 'completed' : 'needsAction' } });
+    } catch (err) { console.error(err); }
+  } else {
+    save('sd_todos', load('sd_todos').map(t => t.id===id?{...t,done}:t));
+  }
+  await renderTodos();
 }
-function addGoal() {
+
+async function deleteTodo(id) {
+  if (isConnected) {
+    try { await gapi.client.tasks.tasks.delete({ tasklist: '@default', task: id }); } catch (err) { console.error(err); }
+  } else {
+    save('sd_todos', load('sd_todos').filter(t => t.id!==id));
+  }
+  await renderTodos();
+}
+
+// ── Goals ──────────────────────────────────────────────────────────────────
+async function renderGoals() {
+  const el = document.getElementById('goals-list');
+  const goalsListId = localStorage.getItem('gtasks_goals_id');
+  if (!isConnected || !goalsListId) {
+    const goals = load('sd_goals');
+    if (!goals.length) { el.innerHTML = '<div class="empty">No goals yet</div>'; return; }
+    el.innerHTML = goals.map(g => `<div class="goal-item">
+      <input type="checkbox" class="check" ${g.done?'checked':''} onchange="toggleGoal('${g.id}',this.checked)">
+      <span class="item-text ${g.done?'done':''}">${esc(g.title)}</span>
+      <button class="item-del" onclick="deleteGoal('${g.id}')">×</button>
+    </div>`).join('');
+    return;
+  }
+  try {
+    const resp  = await gapi.client.tasks.tasks.list({ tasklist: goalsListId, showCompleted: true, showHidden: true, maxResults: 100 });
+    const goals = (resp.result.items || []).filter(g => g.title);
+    if (!goals.length) { el.innerHTML = '<div class="empty">No goals yet</div>'; return; }
+    el.innerHTML = goals.map(g => `<div class="goal-item">
+      <input type="checkbox" class="check" ${g.status==='completed'?'checked':''} onchange="toggleGoal('${g.id}',this.checked)">
+      <span class="item-text ${g.status==='completed'?'done':''}">${esc(g.title)}</span>
+      <button class="item-del" onclick="deleteGoal('${g.id}')">×</button>
+    </div>`).join('');
+  } catch (err) { el.innerHTML = '<div class="empty">Could not load goals.</div>'; console.error(err); }
+}
+
+async function addGoal() {
   const title = document.getElementById('goal-title').value.trim();
   if (!title) return;
-  const goals = load('sd_goals');
-  goals.push({ id: uid(), title, done: false });
-  save('sd_goals', goals);
+  const goalsListId = localStorage.getItem('gtasks_goals_id');
+  if (isConnected && goalsListId) {
+    try {
+      await gapi.client.tasks.tasks.insert({ tasklist: goalsListId, resource: { title, status: 'needsAction' } });
+    } catch (err) { console.error(err); }
+  } else {
+    const goals = load('sd_goals');
+    goals.push({ id: uid(), title, done: false });
+    save('sd_goals', goals);
+  }
   document.getElementById('goal-title').value = '';
-  toggleForm('goal-form'); renderGoals();
+  toggleForm('goal-form');
+  await renderGoals();
 }
-function toggleGoal(id, done) { save('sd_goals', load('sd_goals').map(g => g.id===id?{...g,done}:g)); renderGoals(); }
-function deleteGoal(id) { save('sd_goals', load('sd_goals').filter(g => g.id!==id)); renderGoals(); }
+
+async function toggleGoal(id, done) {
+  const goalsListId = localStorage.getItem('gtasks_goals_id');
+  if (isConnected && goalsListId) {
+    try {
+      const goal = await gapi.client.tasks.tasks.get({ tasklist: goalsListId, task: id });
+      await gapi.client.tasks.tasks.update({ tasklist: goalsListId, task: id, resource: { ...goal.result, status: done ? 'completed' : 'needsAction' } });
+    } catch (err) { console.error(err); }
+  } else {
+    save('sd_goals', load('sd_goals').map(g => g.id===id?{...g,done}:g));
+  }
+  await renderGoals();
+}
+
+async function deleteGoal(id) {
+  const goalsListId = localStorage.getItem('gtasks_goals_id');
+  if (isConnected && goalsListId) {
+    try { await gapi.client.tasks.tasks.delete({ tasklist: goalsListId, task: id }); } catch (err) { console.error(err); }
+  } else {
+    save('sd_goals', load('sd_goals').filter(g => g.id!==id));
+  }
+  await renderGoals();
+}
 
 function toggleForm(id) { document.getElementById(id).classList.toggle('open'); }
 
