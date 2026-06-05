@@ -544,23 +544,6 @@ async function initTasksAndRender() {
       const newList = await gapi.client.tasks.tasklists.insert({ resource: { title: 'Dashboard Goals' } });
       localStorage.setItem('gtasks_goals_id', newList.result.id);
     }
-    // Migrate any existing localStorage todos to Google Tasks
-    const localTodos = load('sd_todos');
-    if (localTodos.length) {
-      for (const t of localTodos) {
-        await gapi.client.tasks.tasks.insert({ tasklist: '@default', resource: { title: t.title, status: t.done ? 'completed' : 'needsAction' } });
-      }
-      save('sd_todos', []);
-    }
-    // Migrate any existing localStorage goals to Google Tasks
-    const localGoals = load('sd_goals');
-    const goalsListId = localStorage.getItem('gtasks_goals_id');
-    if (localGoals.length && goalsListId) {
-      for (const g of localGoals) {
-        await gapi.client.tasks.tasks.insert({ tasklist: goalsListId, resource: { title: g.title, status: g.done ? 'completed' : 'needsAction' } });
-      }
-      save('sd_goals', []);
-    }
   } catch (err) { console.error('Tasks init error:', err); }
   await renderTodos();
   await renderGoals();
@@ -701,41 +684,6 @@ function toggleForm(id) { document.getElementById(id).classList.toggle('open'); 
 document.getElementById('ev-date').value      = todayStr();
 document.getElementById('gcal-ev-date').value = todayStr();
 
-// Seed assignments if list is empty
-if (!load('sd_events').length) {
-  const seedEvents = [
-    { title: 'ALEKS Exam', date: '2026-06-25', time: '', type: 'summative' },
-    { title: 'EMS: Textbook Notes (Chp. 1-8)', date: '2026-07-06', time: '', type: 'formative' },
-    { title: 'EMS: Upload FEMA Course 100', date: '2026-07-06', time: '', type: 'formative' },
-    { title: 'EMS: Upload FEMA Course 200', date: '2026-07-06', time: '', type: 'formative' },
-    { title: 'EMS: Upload FEMA Course 700', date: '2026-07-06', time: '', type: 'formative' },
-    { title: 'EMS: Upload FEMA Course 800', date: '2026-07-06', time: '', type: 'formative' },
-    { title: 'EMS: Upload FEMA Course WMD', date: '2026-07-06', time: '', type: 'formative' },
-    { title: 'EMS: Review EMT Skills Videos', date: '2026-07-06', time: '', type: 'formative' },
-  ];
-  save('sd_events', seedEvents.map(e => ({ id: uid(), ...e })));
-}
-
-// Seed todos from Google Keep if list is empty
-if (!load('sd_todos').length) {
-  const seedTodos = [
-    '"2nd Brain" Reel',
-    'Backrooms Movie',
-    'Claude Roadmap',
-    'Make Roblox Game',
-    'Laundry',
-    'ALEKS Exam',
-    'EMS: Textbook Notes (Chp. 1-8)',
-    'EMS: Upload FEMA Course 100',
-    'EMS: Upload FEMA Course 200',
-    'EMS: Upload FEMA Course 700',
-    'EMS: Upload FEMA Course 800',
-    'EMS: Upload FEMA Course WMD',
-    'EMS: Review EMT Skills Videos',
-    'Lunch w/ Dr. Lee before college',
-  ];
-  save('sd_todos', seedTodos.map(title => ({ id: uid(), title, done: false })));
-}
 
 updatePriority();
 renderLocalEvents();
