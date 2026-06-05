@@ -563,8 +563,9 @@ async function renderTodos() {
     return;
   }
   try {
-    const resp  = await gapi.client.tasks.tasks.list({ tasklist: '@default', showCompleted: true, showHidden: true, maxResults: 100 });
-    const tasks = (resp.result.items || []).filter(t => t.title);
+    const resp  = await gapi.client.tasks.tasks.list({ tasklist: '@default', showCompleted: false, maxResults: 100 });
+    const seen  = new Set();
+    const tasks = (resp.result.items || []).filter(t => { if (!t.title || seen.has(t.title)) return false; seen.add(t.title); return true; });
     if (!tasks.length) { el.innerHTML = '<div class="empty">No tasks yet</div>'; return; }
     el.innerHTML = tasks.map(t => `<div class="todo-item">
       <input type="checkbox" class="check" ${t.status==='completed'?'checked':''} onchange="toggleTodo('${t.id}',this.checked)">
@@ -627,8 +628,9 @@ async function renderGoals() {
     return;
   }
   try {
-    const resp  = await gapi.client.tasks.tasks.list({ tasklist: goalsListId, showCompleted: true, showHidden: true, maxResults: 100 });
-    const goals = (resp.result.items || []).filter(g => g.title);
+    const resp  = await gapi.client.tasks.tasks.list({ tasklist: goalsListId, showCompleted: false, maxResults: 100 });
+    const seenG = new Set();
+    const goals = (resp.result.items || []).filter(g => { if (!g.title || seenG.has(g.title)) return false; seenG.add(g.title); return true; });
     if (!goals.length) { el.innerHTML = '<div class="empty">No goals yet</div>'; return; }
     el.innerHTML = goals.map(g => `<div class="goal-item">
       <input type="checkbox" class="check" ${g.status==='completed'?'checked':''} onchange="toggleGoal('${g.id}',this.checked)">
